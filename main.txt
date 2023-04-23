@@ -1,0 +1,140 @@
+--@name Steering
+--@author Tyunge [ STEAM_0:0:78909614 ]
+--@shared
+
+if SERVER then
+    wire.adjustInputs({"Chair","Base","Slave"},{"entity","entity","entity"})
+    wire.adjustOutputs({"Angle"},{"number"}) 
+    local Chair, Base, Slave =  entity(-1),  entity(-1),  entity(-1)
+    local allInputsValid = false
+    
+    local SETTINGS = {
+        maxAngle        = 45,
+        maxRate         = 3,
+        dampening       = 0.15,
+        
+        invert          = -1,
+        offsetDegree    = 0
+    }
+    
+    local STEERING = {
+        angle = 0
+    }
+    
+    local BASE = {
+        angleVelocity = 0
+    }
+    
+    
+    local function update()
+        if not allInputsValid or not Chair:getDriver():isValid() then 
+            Slave:setAngles(Base:localToWorldAngles(Angle(0,STEERING.angle+SETTINGS.offsetDegree,0)))
+            return 
+        end
+        local driver = Chair:getDriver()
+        local origin = driver:getShootPos()
+        local direction = (driver:getAimVector():getAngle()-Base:getAngles()):getForward()        
+        
+        
+        local deltaVel = Base:getAngleVelocityAngle().y - BASE.angleVelocity
+        BASE.angleVelocity = Base:getAngleVelocityAngle().y
+        
+        local angle = direction:dot(Chair:getRight())*(90*SETTINGS.invert)
+        local dampening = deltaVel*SETTINGS.dampening*SETTINGS.invert
+        
+        STEERING.angle = math.approach( STEERING.angle, angle+dampening, SETTINGS.maxRate )
+        STEERING.angle = math.clamp( STEERING.angle, -SETTINGS.maxAngle, SETTINGS.maxAngle )
+        
+        Slave:setAngles(Base:localToWorldAngles(Angle(0,STEERING.angle+SETTINGS.offsetDegree,0)))
+        wire.ports.Angle = STEERING.angle
+    end
+    
+    local function vehicleEntered(ply, veh, num)
+        if not allInputsValid then return end
+        net.start("Base")
+            net.writeEntity(Base)
+        net.send(ply)
+    end
+    
+    local function getWireInputs(inp, val)
+        if inp == "Chair" then Chair = val end
+        if inp == "Base" then Base = val end
+        if inp == "Slave" then Slave = val end
+        allInputsValid = Chair:isValid() and Base:isValid() and Slave:isValid()
+    end
+    
+    local function freezeSlave(ply, ent, physObj)
+        if ent == Slave then
+            Slave:setFrozen(true)
+        end
+    end
+    
+    hook.add("PlayerEnteredVehicle","vehicleEntered",vehicleEntered)
+    hook.add("input","getWireInputs",getWireInputs)
+    hook.add("tick","update",update)
+    hook.add("PlayerUnfrozeObject","freezeSlave",freezeSlave)
+end
+
+if CLIENT then
+    local base = entity(-1)
+    
+    local thirdPerson = false
+    local distance = 128
+    local origin = Vector()
+    local angles = Angle()
+    
+    net.receive("Base",function(len) 
+        base = net.readEntity() 
+    end)
+    
+    local function calcView()
+        if not render.isHUDActive() then return end
+        if not base:isValid() then return end
+        local baseAngles = base:getAngles()
+        origin = player():getShootPos()
+        local aimDirection = player():getAimVector()
+        angles = aimDirection:getAngle() - Angle(-baseAngles.p,baseAngles.y,-baseAngles.r)
+        
+        if thirdPerson then
+            origin = origin + (angles:getForward()*-distance)
+        end
+        
+        
+        local newView = {
+            origin = origin,
+            angles = angles,
+            drawviewer = thirdPerson
+        }
+
+        return newView        
+    end
+    
+    local function render3D()
+        if not render.isHUDActive() then return end
+        local direction = angles:getForward()
+        local aimPos = trace.line(origin, origin+direction*512, {},131083).HitPos
+        render.draw3DSphere(aimPos, 4, 16, 16)
+    end    
+    
+    local function cameraControl(button)
+        if not render.isHUDActive() then return end
+        
+        if button == 83 then
+            thirdPerson = not thirdPerson
+        end
+        
+        if button == 112 then
+            //zoom in
+            distance = distance-10
+        end
+        
+        if button == 113 then
+            //zoom out
+            distance = distance+10
+        end
+    end
+
+    hook.add("inputPressed","inputPressed",cameraControl)
+    hook.add("calcView","ReleasePlayerCamera",calcView)
+    hook.add("postdrawopaquerenderables","render3D",render3D)
+end
